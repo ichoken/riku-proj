@@ -182,3 +182,75 @@
     border-right-color: var(--border);
   }
 }
+
+/* --- Game styles --- */
+.game-root {
+  position: relative;
+  width: 100%;
+  height: 100vh;
+  overflow: hidden;
+}
+
+.game-canvas {
+  width: 100%;
+  height: 100%;
+  display: block;
+  touch-action: none;
+}
+
+.joy {
+  position: fixed;
+  left: 18px;
+  bottom: 18px;
+  width: 140px;
+  height: 140px;
+  z-index: 40;
+  pointer-events: auto;
+}
+.joy-base {
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  background: rgba(0,0,0,0.14);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  touch-action: none;
+  -webkit-tap-highlight-color: transparent;
+}
+.joy-knob {
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  background: rgba(255,255,255,0.9);
+  box-shadow: 0 6px 12px rgba(0,0,0,0.18);
+  transform: translate(0,0);
+  transition: transform 0.02s linear;
+}
+
+.jump-button {
+  position: fixed;
+  right: 18px;
+  bottom: 18px;
+  width: 84px;
+  height: 84px;
+  border-radius: 50%;
+  background: rgba(255,255,255,0.12);
+  color: white;
+  font-size: 28px;
+  border: none;
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  touch-action: none;
+}
+.jump-button:active {
+  background: rgba(255,255,255,0.2);
+}
+
+@media (max-width: 480px) {
+  .joy { width: 110px; height: 110px }
+  .joy-knob { width: 46px; height: 46px }
+  .jump-button { width: 72px; height: 72px }
+}
