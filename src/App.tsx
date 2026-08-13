@@ -39,7 +39,7 @@ export default function App(): ReactElement {
 
   // config
   const SPEED = 160 // px/sec
-  const JUMP_SPEED = 360
+  const JUMP_SPEED = 520 // increased jump height
   const GRAVITY = 1200
   const AIR_CONTROL = 0.6
   const ATTACK_COOLDOWN = 400 // ms
@@ -52,7 +52,8 @@ export default function App(): ReactElement {
   const worldWidth = 3000
   const cameraLerpSpeed = 8.0
 
-  const GOAL_X = worldWidth - 180
+  // place goal closer to start so distance is shorter
+  const GOAL_X = 1000
   const GOAL_RANGE = 48
 
   // background objects
