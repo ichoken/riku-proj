@@ -235,8 +235,8 @@
   width: 84px;
   height: 84px;
   border-radius: 50%;
-  background: rgba(255,255,255,0.12);
-  color: white;
+  background: #000; /* 本体を黒に */
+  color: #fff; /* 矢印は白 */
   font-size: 28px;
   border: none;
   z-index: 40;
@@ -246,7 +246,7 @@
   touch-action: none;
 }
 .jump-button:active {
-  background: rgba(255,255,255,0.2);
+  background: #111;
 }
 
 @media (max-width: 480px) {
