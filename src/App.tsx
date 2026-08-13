@@ -17,22 +17,43 @@ export default function App(): ReactElement {
   const [joystickActive, setJoystickActive] = useState(false)
 
   // player state
-  const playerRef = useRef({ x: 200, y: 0, vy: 0, isGrounded: true, dir: 1 })
+  const playerRef = useRef({
+    x: 200,
+    y: 0,
+    vy: 0,
+    isGrounded: true,
+    dir: 1,
+    hp: 100,
+  })
+
+  // game objects
+  const enemiesRef = useRef<Array<any>>([])
+  const particlesRef = useRef<Array<any>>([])
+  const lastAttackRef = useRef<number>(0)
+  const groundYRef = useRef<number>(0)
+  const gameOverRef = useRef(false)
+  const [gameOver, setGameOver] = useState(false)
+  const attackEffectsRef = useRef<Array<any>>([])
 
   // config
   const SPEED = 160 // px/sec
   const JUMP_SPEED = 360
   const GRAVITY = 1200
   const AIR_CONTROL = 0.6
+  const ATTACK_COOLDOWN = 400 // ms
+  const ATTACK_RANGE = 140 // px (player reach increased)
+  const COLLIDE_RANGE = 36 // px (enemy-player collision)
 
-  // joystick handling
+  // joystick handling (unchanged)
   useEffect(() => {
     const base = document.getElementById('joy-base')!
     const knob = document.getElementById('joy-knob')!
     if (!base || !knob) return
 
     let activePointer: number | null = null
-    function getRect() { return base.getBoundingClientRect() }
+    function getRect() {
+      return base.getBoundingClientRect()
+    }
     const maxR = Math.min(getRect().width, getRect().height) / 2
     const deadZone = Math.max(6, maxR * 0.12)
 
@@ -73,9 +94,7 @@ export default function App(): ReactElement {
 
     function pointerUp(e: any) {
       if (activePointer !== e.pointerId) return
-      try {
-        try { (e.target as Element).releasePointerCapture(activePointer!) } catch {}
-      } catch {}
+      try { try { (e.target as Element).releasePointerCapture(activePointer!) } catch {} } catch {}
       activePointer = null
       inputRef.current = { x: 0, y: 0 }
       setKnob(0, 0)
@@ -110,7 +129,33 @@ export default function App(): ReactElement {
     return () => btn.removeEventListener('pointerdown', onDown)
   }, [])
 
-  // keyboard support
+  // attack button (visual feedback + action)
+  useEffect(() => {
+    const btn = document.getElementById('attackButton')!
+    function onAttack(e: PointerEvent) {
+      e.preventDefault()
+      doPlayerAttack(performance.now())
+    }
+    function onDown(e: PointerEvent) {
+      ;(btn as HTMLButtonElement).classList.add('pressed')
+      onAttack(e)
+    }
+    function onUp() {
+      ;(btn as HTMLButtonElement).classList.remove('pressed')
+    }
+    if (btn) {
+      btn.addEventListener('pointerdown', onDown)
+      window.addEventListener('pointerup', onUp)
+    }
+    return () => {
+      if (btn) {
+        btn.removeEventListener('pointerdown', onDown)
+        window.removeEventListener('pointerup', onUp)
+      }
+    }
+  }, [])
+
+  // keyboard support (adds attack keys)
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
       if (e.code === 'Space' || e.code === 'ArrowUp') {
@@ -127,6 +172,10 @@ export default function App(): ReactElement {
       if (e.code === 'ArrowRight' || e.key === 'd') {
         inputRef.current.x = 1
       }
+      // attack keys
+      if (e.code === 'KeyX' || e.code === 'KeyZ' || e.code === 'KeyF') {
+        doPlayerAttack(performance.now())
+      }
     }
     function onKeyUp(e: KeyboardEvent) {
       if (['ArrowLeft', 'ArrowRight', 'a', 'd'].includes(e.key) || ['ArrowLeft', 'ArrowRight'].includes(e.code)) {
@@ -140,6 +189,96 @@ export default function App(): ReactElement {
       window.removeEventListener('keyup', onKeyUp)
     }
   }, [])
+
+  // spawn multiple enemies initially (3 enemies)
+  useEffect(() => {
+    spawnEnemies()
+  }, [])
+
+  function spawnEnemies() {
+    const baseY = 0
+    const startX = 600
+    const arr: any[] = []
+    for (let i = 0; i < 3; i++) {
+      arr.push({
+        id: i + 1,
+        x: startX + i * 140,
+        y: baseY,
+        vx: 30 * (i % 2 === 0 ? 1 : -1),
+        patrolLeft: startX + i * 140 - 80,
+        patrolRight: startX + i * 140 + 80,
+        alive: true,
+      })
+    }
+    enemiesRef.current = arr
+  }
+
+  function restart() {
+    gameOverRef.current = false
+    setGameOver(false)
+    // reset player
+    const p = playerRef.current
+    p.x = 200
+    p.y = 0
+    p.vy = 0
+    p.isGrounded = true
+    p.dir = 1
+    // clear particles and attack effects
+    particlesRef.current = []
+    attackEffectsRef.current = []
+    lastAttackRef.current = 0
+    // respawn enemies
+    spawnEnemies()
+  }
+
+  // attack logic (one-hit kill nearest enemy within range)
+  function doPlayerAttack(nowMs: number) {
+    if (nowMs - lastAttackRef.current < ATTACK_COOLDOWN) return
+    lastAttackRef.current = nowMs
+    const p = playerRef.current
+    const enemies = enemiesRef.current
+    const enemyY = groundYRef.current || p.y
+    // find nearest alive enemy within range
+    let best: any = null
+    let bestDist = Infinity
+    for (const e of enemies) {
+      if (!e.alive) continue
+      const dx = e.x - p.x
+      const dy = (enemyY - p.y)
+      const d = Math.hypot(dx, dy)
+      if (d < ATTACK_RANGE && d < bestDist) {
+        best = e
+        bestDist = d
+      }
+    }
+    if (best) {
+      // one-shot kill
+      best.alive = false
+      // spawn visible attack effect near player so user sees the action
+      const p = playerRef.current
+      attackEffectsRef.current.push({ x: p.x + p.dir * 20, y: p.y - 20, life: 0.18 })
+      // spawn particles (skin-colored small stars)
+      spawnHitParticles(best.x, enemyY - 20)
+    }
+  }
+
+  function spawnHitParticles(x: number, y: number) {
+    const parts = particlesRef.current
+    const count = 10
+    for (let i = 0; i < count; i++) {
+      const angle = (Math.PI * 2) * (i / count) + (Math.random() - 0.5) * 0.5
+      const speed = 80 + Math.random() * 120
+      parts.push({
+        x,
+        y,
+        vx: Math.cos(angle) * speed,
+        vy: Math.sin(angle) * speed - 60,
+        life: 0.6 + Math.random() * 0.4,
+        size: 4 + Math.random() * 4,
+        color: '#f4c2b0', // 肌色っぽい
+      })
+    }
+  }
 
   // main loop
   useEffect(() => {
@@ -174,6 +313,7 @@ export default function App(): ReactElement {
 
       // ground at 60% of canvas height
       const groundY = canvas.height / (window.devicePixelRatio || 1) * 0.6
+      groundYRef.current = groundY
       if (p.y >= groundY) {
         p.y = groundY
         p.vy = 0
@@ -182,6 +322,46 @@ export default function App(): ReactElement {
 
       // clamp within canvas
       p.x = clamp(p.x, 20, canvas.width / (window.devicePixelRatio || 1) - 20)
+
+      // update enemies
+      const enemies = enemiesRef.current
+      for (const en of enemies) {
+        if (!en.alive) continue
+        const enemyY = groundY
+        if (!gameOverRef.current) {
+          en.x += en.vx * dt
+          if (en.x < en.patrolLeft) { en.x = en.patrolLeft; en.vx = Math.abs(en.vx) }
+          if (en.x > en.patrolRight) { en.x = en.patrolRight; en.vx = -Math.abs(en.vx) }
+          // aggro: move toward player if close (use ground distance)
+          const distToPlayer = Math.hypot(p.x - en.x, p.y - enemyY)
+          if (distToPlayer < 140) {
+            en.vx = Math.sign(p.x - en.x) * Math.abs(en.vx)
+          }
+          // if enemy touches player -> Game Over
+          if (distToPlayer < COLLIDE_RANGE) {
+            gameOverRef.current = true
+            setGameOver(true)
+          }
+        }
+      }
+
+      // update particles
+      const parts = particlesRef.current
+      for (let i = parts.length - 1; i >= 0; i--) {
+        const par = parts[i]
+        par.vy += 800 * dt
+        par.x += par.vx * dt
+        par.y += par.vy * dt
+        par.life -= dt
+        if (par.life <= 0) parts.splice(i, 1)
+      }
+
+      // update attack effects
+      const attackEff = attackEffectsRef.current
+      for (let i = attackEff.length - 1; i >= 0; i--) {
+        attackEff[i].life -= dt
+        if (attackEff[i].life <= 0) attackEff.splice(i, 1)
+      }
 
       // draw
       ctx.clearRect(0, 0, canvas.width, canvas.height)
@@ -192,7 +372,32 @@ export default function App(): ReactElement {
       ctx.fillStyle = '#6b8e23'
       ctx.fillRect(0, groundY, canvas.width, canvas.height - groundY)
 
+      // draw enemies
+      for (const en of enemies) {
+        if (!en.alive) continue
+        drawEnemy(ctx, en.x, groundY, ts / 1000)
+      }
+
+      // draw player
       drawStickman(ctx, p.x, p.y, ts / 1000, p.dir, p.isGrounded)
+
+      // draw attack effects (visible swing)
+      for (const ae of attackEffectsRef.current) {
+        const aalpha = Math.max(0, ae.life / 0.18)
+        ctx.save()
+        ctx.globalAlpha = aalpha
+        ctx.fillStyle = 'rgba(255,255,180,0.95)'
+        ctx.beginPath()
+        // larger visual effect so reach feels impactful
+        ctx.arc(ae.x, ae.y, 36 * aalpha + 10, 0, Math.PI * 2)
+        ctx.fill()
+        ctx.restore()
+      }
+
+      // draw particles (small skin-colored stars)
+      for (const par of parts) {
+        drawStar(ctx, par.x, par.y, par.size, par.color, par.life / 0.8)
+      }
 
       rafRef.current = requestAnimationFrame(step)
     }
@@ -215,24 +420,32 @@ export default function App(): ReactElement {
         </div>
       </div>
 
+      <button id="attackButton" className="attack-button" aria-label="Attack">✶</button>
       <button id="jumpButton" className="jump-button" aria-label="Jump">↑</button>
+
+      {gameOver && (
+        <div className="overlay">
+          <div className="overlay-box">
+            <div style={{ fontSize: 28, marginBottom: 12 }}>Game Over</div>
+            <button className="overlay-button" onClick={() => restart()}>Restart</button>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
 
 function drawStickman(ctx: CanvasRenderingContext2D, x: number, y: number, t: number, dir: number, grounded: boolean) {
-  // simple procedural stickman
+  // simple procedural stickman (unchanged)
   ctx.save()
   ctx.translate(x, y)
   ctx.scale(dir, 1)
 
-  // body parameters
   const headR = 10
   const bodyH = 30
   const armL = 18
   const legL = 20
 
-  // walk animation (based on time and grounded)
   const walkSpeed = grounded ? 6 : 2
   const phase = Math.sin(t * walkSpeed)
   const armSwing = grounded ? phase * 0.6 : -0.4
@@ -276,5 +489,50 @@ function drawStickman(ctx: CanvasRenderingContext2D, x: number, y: number, t: nu
   ctx.lineTo(-legL * Math.sin(legSwing), legL * Math.cos(legSwing))
   ctx.stroke()
 
+  ctx.restore()
+}
+
+function drawEnemy(ctx: CanvasRenderingContext2D, x: number, groundY: number, t: number) {
+  // simple red stick enemy
+  const headR = 8
+  const bodyH = 26
+  // head
+  ctx.fillStyle = '#6b0b0b'
+  ctx.beginPath()
+  ctx.arc(x, groundY - bodyH - headR, headR, 0, Math.PI * 2)
+  ctx.fill()
+  // body
+  ctx.strokeStyle = '#4b0b0b'
+  ctx.lineWidth = 3
+  ctx.beginPath()
+  ctx.moveTo(x, groundY - bodyH)
+  ctx.lineTo(x, groundY)
+  ctx.stroke()
+  // legs
+  ctx.beginPath()
+  ctx.moveTo(x, groundY)
+  ctx.lineTo(x + 8 * Math.sin(Math.sin(t * 6)), groundY + 12)
+  ctx.moveTo(x, groundY)
+  ctx.lineTo(x - 8 * Math.sin(Math.sin(t * 6)), groundY + 12)
+  ctx.stroke()
+}
+
+function drawStar(ctx: CanvasRenderingContext2D, cx: number, cy: number, radius: number, color: string, alpha = 1) {
+  ctx.save()
+  ctx.globalAlpha = Math.max(0, Math.min(1, alpha))
+  ctx.fillStyle = color
+  ctx.translate(cx, cy)
+  ctx.beginPath()
+  const spikes = 5
+  const outer = radius
+  const inner = radius * 0.45
+  for (let i = 0; i < spikes; i++) {
+    const ang = (i * Math.PI * 2) / spikes
+    const ang2 = ang + Math.PI / spikes
+    ctx.lineTo(Math.cos(ang) * outer, Math.sin(ang) * outer)
+    ctx.lineTo(Math.cos(ang2) * inner, Math.sin(ang2) * inner)
+  }
+  ctx.closePath()
+  ctx.fill()
   ctx.restore()
 }
