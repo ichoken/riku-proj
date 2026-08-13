@@ -43,9 +43,21 @@ export default function App(): ReactElement {
   const ATTACK_COOLDOWN = 400 // ms
   const ATTACK_RANGE = 140 // px (player reach increased)
   const COLLIDE_RANGE = 36 // px (enemy-player collision)
+  // world / camera
+  const cameraXRef = useRef<number>(0)
+  const viewportWidthRef = useRef<number>(0)
+  const viewportHeightRef = useRef<number>(0)
+  const worldWidth = 3000
+  const cameraLerpSpeed = 8.0
+
+  // background objects
+  const treePositionsRef = useRef<Array<{ x: number; type: number }>>([])
+  const bushPositionsRef = useRef<Array<{ x: number }>>([])
 
   // joystick handling (unchanged)
   useEffect(() => {
+    // spawn background (trees, bushes)
+    spawnBackground()
     const base = document.getElementById('joy-base')!
     const knob = document.getElementById('joy-knob')!
     if (!base || !knob) return
@@ -280,6 +292,26 @@ export default function App(): ReactElement {
     }
   }
 
+  function spawnBackground() {
+    const worldW = worldWidth
+    const trees: any[] = []
+    const bushes: any[] = []
+    // distant trees
+    for (let x = 0; x < worldW; x += 250 + Math.random() * 200) {
+      trees.push({ x: x + (Math.random() * 80 - 40), type: 0 })
+    }
+    // mid trees
+    for (let x = 40; x < worldW; x += 120 + Math.random() * 80) {
+      trees.push({ x: x + (Math.random() * 40 - 20), type: 1 })
+    }
+    // bushes (foreground)
+    for (let x = 20; x < worldW; x += 80 + Math.random() * 80) {
+      bushes.push({ x: x + (Math.random() * 30 - 15) })
+    }
+    treePositionsRef.current = trees
+    bushPositionsRef.current = bushes
+  }
+
   // main loop
   useEffect(() => {
     const canvas = canvasRef.current!
@@ -290,6 +322,9 @@ export default function App(): ReactElement {
       canvas.width = Math.floor(canvas.clientWidth * dpr)
       canvas.height = Math.floor(canvas.clientHeight * dpr)
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
+      // store viewport size in CSS pixels
+      viewportWidthRef.current = canvas.clientWidth
+      viewportHeightRef.current = canvas.clientHeight
     }
     resize()
     window.addEventListener('resize', resize)
@@ -320,8 +355,8 @@ export default function App(): ReactElement {
         p.isGrounded = true
       }
 
-      // clamp within canvas
-      p.x = clamp(p.x, 20, canvas.width / (window.devicePixelRatio || 1) - 20)
+      // clamp within world
+      p.x = clamp(p.x, 20, worldWidth - 20)
 
       // update enemies
       const enemies = enemiesRef.current
@@ -363,41 +398,62 @@ export default function App(): ReactElement {
         if (attackEff[i].life <= 0) attackEff.splice(i, 1)
       }
 
-      // draw
+      // draw: sky (screen-space)
       ctx.clearRect(0, 0, canvas.width, canvas.height)
-      // sky
-      ctx.fillStyle = '#87CEEB'
-      ctx.fillRect(0, 0, canvas.width, canvas.height)
-      // ground
-      ctx.fillStyle = '#6b8e23'
-      ctx.fillRect(0, groundY, canvas.width, canvas.height - groundY)
+      drawSky(ctx, viewportWidthRef.current || canvas.clientWidth, viewportHeightRef.current || canvas.clientHeight)
 
-      // draw enemies
+      // compute camera
+      const viewportW = viewportWidthRef.current || (canvas.width / (window.devicePixelRatio || 1))
+      const viewportCenter = viewportW / 2
+      let targetCamera = 0
+      if (p.x > viewportCenter) {
+        targetCamera = clamp(p.x - viewportCenter, 0, Math.max(0, worldWidth - viewportW))
+      } else {
+        targetCamera = 0
+      }
+      const cam = cameraXRef.current
+      const lerp = 1 - Math.exp(-cameraLerpSpeed * dt)
+      cameraXRef.current = cam + (targetCamera - cam) * lerp
+      const cameraX = cameraXRef.current
+
+      // world-space draw (translated by camera)
+      ctx.save()
+      ctx.translate(-cameraX, 0)
+
+      // background layers (parallax trees and bushes)
+      drawBackgroundLayers(ctx, cameraX, groundY, treePositionsRef.current, bushPositionsRef.current, viewportWidthRef.current || canvas.clientWidth)
+
+      // ground (world width)
+      ctx.fillStyle = '#6b8e23'
+      ctx.fillRect(0, groundY, worldWidth, canvas.height - groundY)
+
+      // draw enemies (world coords)
       for (const en of enemies) {
         if (!en.alive) continue
         drawEnemy(ctx, en.x, groundY, ts / 1000)
       }
 
-      // draw player
+      // draw player (world coords)
       drawStickman(ctx, p.x, p.y, ts / 1000, p.dir, p.isGrounded)
 
-      // draw attack effects (visible swing)
+      // draw particles (world coords)
+      for (const par of parts) {
+        drawStar(ctx, par.x, par.y, par.size, par.color, par.life / 0.8)
+      }
+
+      // draw attack effects (world coords)
       for (const ae of attackEffectsRef.current) {
         const aalpha = Math.max(0, ae.life / 0.18)
         ctx.save()
         ctx.globalAlpha = aalpha
         ctx.fillStyle = 'rgba(255,255,180,0.95)'
         ctx.beginPath()
-        // larger visual effect so reach feels impactful
         ctx.arc(ae.x, ae.y, 36 * aalpha + 10, 0, Math.PI * 2)
         ctx.fill()
         ctx.restore()
       }
 
-      // draw particles (small skin-colored stars)
-      for (const par of parts) {
-        drawStar(ctx, par.x, par.y, par.size, par.color, par.life / 0.8)
-      }
+      ctx.restore()
 
       rafRef.current = requestAnimationFrame(step)
     }
@@ -433,6 +489,68 @@ export default function App(): ReactElement {
       )}
     </div>
   )
+}
+
+function drawSky(ctx: CanvasRenderingContext2D, vw: number, vh: number) {
+  // simple vertical gradient sky
+  const g = ctx.createLinearGradient(0, 0, 0, vh)
+  g.addColorStop(0, '#9dd3ff')
+  g.addColorStop(1, '#87CEEB')
+  ctx.save()
+  ctx.setTransform(1, 0, 0, 1, 0, 0)
+  ctx.fillStyle = g
+  ctx.fillRect(0, 0, vw, vh)
+  ctx.restore()
+}
+
+function drawBackgroundLayers(ctx: CanvasRenderingContext2D, cameraX: number, groundY: number, treePositions: Array<{ x: number; type: number }>, bushPositions: Array<{ x: number }>, vw: number) {
+  // far trees / shapes (factor 0.25)
+  const farF = 0.25
+  ctx.save()
+  ctx.fillStyle = '#6ea86e'
+  for (const t of treePositions) {
+    if (t.type !== 0) continue
+    const sx = t.x - cameraX * farF
+    if (sx < -200 || sx > cameraX + vw + 200) continue
+    const baseY = groundY * 0.7
+    ctx.beginPath()
+    ctx.moveTo(sx, baseY)
+    ctx.lineTo(sx + 80, baseY)
+    ctx.lineTo(sx + 40, baseY - 80)
+    ctx.closePath()
+    ctx.fill()
+  }
+  ctx.restore()
+
+  // mid trees (factor 0.55)
+  const midF = 0.55
+  for (const t of treePositions) {
+    if (t.type !== 1) continue
+    const sx = t.x - cameraX * midF
+    if (sx < -200 || sx > cameraX + vw + 200) continue
+    const trunkH = 28
+    ctx.fillStyle = '#5b3a20'
+    ctx.fillRect(sx - 6, groundY - trunkH, 12, trunkH)
+    ctx.beginPath()
+    ctx.fillStyle = '#2f9f2f'
+    ctx.ellipse(sx, groundY - trunkH - 20, 28, 22, 0, 0, Math.PI * 2)
+    ctx.fill()
+  }
+
+  // bushes (foreground, factor 0.95)
+  const frontF = 0.95
+  for (const b of bushPositions) {
+    const sx = b.x - cameraX * frontF
+    if (sx < -200 || sx > cameraX + vw + 200) continue
+    ctx.fillStyle = '#387033'
+    ctx.beginPath()
+    ctx.ellipse(sx, groundY - 8, 22, 14, 0, 0, Math.PI * 2)
+    ctx.fill()
+    ctx.fillStyle = '#4fb048'
+    ctx.beginPath()
+    ctx.ellipse(sx - 6, groundY - 12, 10, 6, 0, 0, Math.PI * 2)
+    ctx.fill()
+  }
 }
 
 function drawStickman(ctx: CanvasRenderingContext2D, x: number, y: number, t: number, dir: number, grounded: boolean) {
