@@ -36,6 +36,7 @@ export default function App(): ReactElement {
   const winRef = useRef(false)
   const [win, setWin] = useState(false)
   const attackEffectsRef = useRef<Array<any>>([])
+  const projectilesRef = useRef<Array<any>>([])
 
   // config
   const SPEED = 160 // px/sec
@@ -222,15 +223,21 @@ export default function App(): ReactElement {
     const baseY = 0
     const startX = 600
     const arr: any[] = []
-    for (let i = 0; i < 3; i++) {
+    // spawn 4 ranged enemies
+    for (let i = 0; i < 4; i++) {
       arr.push({
         id: i + 1,
         x: startX + i * 140,
         y: baseY,
-        vx: 30 * (i % 2 === 0 ? 1 : -1),
+        vx: 20 * (i % 2 === 0 ? 1 : -1),
         patrolLeft: startX + i * 140 - 80,
         patrolRight: startX + i * 140 + 80,
         alive: true,
+        type: 'ranged',
+        shootCooldown: 1600,
+        lastShot: 0,
+        bulletSpeed: 320,
+        shotRange: 600,
       })
     }
     enemiesRef.current = arr
@@ -254,6 +261,8 @@ export default function App(): ReactElement {
     // clear particles and attack effects
     particlesRef.current = []
     attackEffectsRef.current = []
+    // clear projectiles
+    projectilesRef.current = []
     lastAttackRef.current = 0
     // respawn enemies
     spawnEnemies()
@@ -385,25 +394,63 @@ export default function App(): ReactElement {
 
       // update enemies
       const enemies = enemiesRef.current
-      for (const en of enemies) {
-        if (!en.alive) continue
-        const enemyY = groundY
-        if (!gameOverRef.current) {
-          en.x += en.vx * dt
-          if (en.x < en.patrolLeft) { en.x = en.patrolLeft; en.vx = Math.abs(en.vx) }
-          if (en.x > en.patrolRight) { en.x = en.patrolRight; en.vx = -Math.abs(en.vx) }
-          // aggro: move toward player if close (use ground distance)
-          const distToPlayer = Math.hypot(p.x - en.x, p.y - enemyY)
-          if (distToPlayer < 140) {
-            en.vx = Math.sign(p.x - en.x) * Math.abs(en.vx)
-          }
-          // if enemy touches player -> Game Over
-          if (distToPlayer < COLLIDE_RANGE) {
-            gameOverRef.current = true
-            setGameOver(true)
-            // freeze inputs immediately
-            inputRef.current = { x: 0, y: 0 }
-          }
+    for (const en of enemies) {
+      if (!en.alive) continue
+      const enemyY = groundY
+      if (!gameOverRef.current) {
+        en.x += en.vx * dt
+        if (en.x < en.patrolLeft) { en.x = en.patrolLeft; en.vx = Math.abs(en.vx) }
+        if (en.x > en.patrolRight) { en.x = en.patrolRight; en.vx = -Math.abs(en.vx) }
+        // aggro: move toward player if close (use ground distance)
+        const distToPlayer = Math.hypot(p.x - en.x, p.y - enemyY)
+        if (distToPlayer < 140) {
+          en.vx = Math.sign(p.x - en.x) * Math.abs(en.vx)
+        }
+        // if enemy touches player -> Game Over
+        if (distToPlayer < COLLIDE_RANGE) {
+          gameOverRef.current = true
+          setGameOver(true)
+          // freeze inputs immediately
+          inputRef.current = { x: 0, y: 0 }
+        }
+      }
+
+      // ranged enemy shooting
+      if (en.type === 'ranged' && en.alive && !gameOverRef.current && !winRef.current) {
+        const nowMs = ts
+        const dx = p.x - en.x
+        const dy = p.y - enemyY
+        const dist = Math.hypot(dx, dy)
+        if (dist < (en.shotRange || 600) && nowMs - (en.lastShot || 0) > (en.shootCooldown || 1600)) {
+          en.lastShot = nowMs
+          const dir = Math.sign(dx) || 1
+          const vx = dir * (en.bulletSpeed || 320)
+          const vy = -200 - Math.random() * 80
+          projectilesRef.current.push({ x: en.x + dir * 12, y: enemyY - 24, vx, vy, life: 6, ownerId: en.id })
+        }
+      }
+    }
+
+      // update projectiles (apply gravity, move, collision)
+      const projectiles = projectilesRef.current
+      for (let i = projectiles.length - 1; i >= 0; i--) {
+        const b = projectiles[i]
+        b.vy += GRAVITY * dt
+        b.x += b.vx * dt
+        b.y += b.vy * dt
+        b.life -= dt
+        if (b.life <= 0 || b.x < -200 || b.x > worldWidth + 200) {
+          projectiles.splice(i, 1)
+          continue
+        }
+        const dist = Math.hypot(p.x - b.x, p.y - b.y)
+        if (dist < 18) {
+          gameOverRef.current = true
+          setGameOver(true)
+          spawnHitParticles(b.x, b.y)
+          projectiles.splice(i, 1)
+          inputRef.current = { x: 0, y: 0 }
+          break
         }
       }
 
@@ -468,10 +515,20 @@ export default function App(): ReactElement {
       // draw goal
       drawGoal(ctx, GOAL_X, groundY, ts / 1000)
 
-      // draw enemies (world coords)
-      for (const en of enemies) {
-        if (!en.alive) continue
-        drawEnemy(ctx, en.x, groundY, ts / 1000)
+    // draw enemies (world coords)
+    for (const en of enemies) {
+      if (!en.alive) continue
+      drawEnemy(ctx, en.x, groundY, ts / 1000)
+    }
+
+      // draw projectiles (world coords)
+      for (const b of projectilesRef.current) {
+        ctx.save()
+        ctx.fillStyle = '#222'
+        ctx.beginPath()
+        ctx.ellipse(b.x, b.y, 6, 6, 0, 0, Math.PI * 2)
+        ctx.fill()
+        ctx.restore()
       }
 
       // draw player (world coords)
