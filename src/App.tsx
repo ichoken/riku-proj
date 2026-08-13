@@ -33,6 +33,8 @@ export default function App(): ReactElement {
   const groundYRef = useRef<number>(0)
   const gameOverRef = useRef(false)
   const [gameOver, setGameOver] = useState(false)
+  const winRef = useRef(false)
+  const [win, setWin] = useState(false)
   const attackEffectsRef = useRef<Array<any>>([])
 
   // config
@@ -49,6 +51,9 @@ export default function App(): ReactElement {
   const viewportHeightRef = useRef<number>(0)
   const worldWidth = 3000
   const cameraLerpSpeed = 8.0
+
+  const GOAL_X = worldWidth - 180
+  const GOAL_RANGE = 48
 
   // background objects
   const treePositionsRef = useRef<Array<{ x: number; type: number }>>([])
@@ -78,6 +83,8 @@ export default function App(): ReactElement {
     }
 
     function pointerDown(e: any) {
+      // ignore joystick when game over or win
+      if (gameOverRef.current || winRef.current) return
       if (activePointer !== null) return
       activePointer = e.pointerId
       try { (e.target as Element).setPointerCapture(activePointer!) } catch {}
@@ -131,6 +138,7 @@ export default function App(): ReactElement {
     const btn = document.getElementById('jumpButton')!
     function onDown(e: PointerEvent) {
       e.preventDefault()
+      if (gameOverRef.current || winRef.current) return
       const p = playerRef.current
       if (p.isGrounded) {
         p.vy = -JUMP_SPEED
@@ -146,6 +154,7 @@ export default function App(): ReactElement {
     const btn = document.getElementById('attackButton')!
     function onAttack(e: PointerEvent) {
       e.preventDefault()
+      if (gameOverRef.current || winRef.current) return
       doPlayerAttack(performance.now())
     }
     function onDown(e: PointerEvent) {
@@ -170,6 +179,7 @@ export default function App(): ReactElement {
   // keyboard support (adds attack keys)
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
+      if (gameOverRef.current || winRef.current) return
       if (e.code === 'Space' || e.code === 'ArrowUp') {
         e.preventDefault()
         const p = playerRef.current
@@ -228,6 +238,9 @@ export default function App(): ReactElement {
   function restart() {
     gameOverRef.current = false
     setGameOver(false)
+    // clear win state as well
+    winRef.current = false
+    setWin(false)
     // reset player
     const p = playerRef.current
     p.x = 200
@@ -235,6 +248,8 @@ export default function App(): ReactElement {
     p.vy = 0
     p.isGrounded = true
     p.dir = 1
+    // reset camera
+    cameraXRef.current = 0
     // clear particles and attack effects
     particlesRef.current = []
     attackEffectsRef.current = []
@@ -334,29 +349,38 @@ export default function App(): ReactElement {
       const dt = Math.min(0.05, (ts - lastRef.current!) / 1000)
       lastRef.current = ts
 
+      try {
+
       const p = playerRef.current
-      // horizontal
-      const inVec = inputRef.current
-      const control = p.isGrounded ? 1 : AIR_CONTROL
-      p.x += inVec.x * SPEED * control * dt
-      if (inVec.x < 0) p.dir = -1
-      else if (inVec.x > 0) p.dir = 1
-
-      // vertical
-      p.vy += GRAVITY * dt
-      p.y += p.vy * dt
-
-      // ground at 60% of canvas height
+      // compute groundY (CSS pixels)
       const groundY = canvas.height / (window.devicePixelRatio || 1) * 0.6
       groundYRef.current = groundY
-      if (p.y >= groundY) {
-        p.y = groundY
-        p.vy = 0
-        p.isGrounded = true
-      }
+      // movement & physics: skip if game over to freeze player in place
+      if (!gameOverRef.current) {
+        // horizontal
+        const inVec = inputRef.current
+        const control = p.isGrounded ? 1 : AIR_CONTROL
+        p.x += inVec.x * SPEED * control * dt
+        if (inVec.x < 0) p.dir = -1
+        else if (inVec.x > 0) p.dir = 1
 
-      // clamp within world
-      p.x = clamp(p.x, 20, worldWidth - 20)
+        // vertical
+        p.vy += GRAVITY * dt
+        p.y += p.vy * dt
+
+        if (p.y >= groundY) {
+          p.y = groundY
+          p.vy = 0
+          p.isGrounded = true
+        }
+
+        // clamp within world
+        p.x = clamp(p.x, 20, worldWidth - 20)
+      } else {
+        // freeze player: clear input and stop vertical motion
+        inputRef.current = { x: 0, y: 0 }
+        p.vy = 0
+      }
 
       // update enemies
       const enemies = enemiesRef.current
@@ -376,7 +400,20 @@ export default function App(): ReactElement {
           if (distToPlayer < COLLIDE_RANGE) {
             gameOverRef.current = true
             setGameOver(true)
+            // freeze inputs immediately
+            inputRef.current = { x: 0, y: 0 }
           }
+        }
+      }
+
+      // check goal (win)
+      if (!gameOverRef.current && !winRef.current) {
+        const dxGoal = Math.abs(p.x - GOAL_X)
+        const dyGoal = Math.abs(p.y - groundY)
+        if (dxGoal < GOAL_RANGE && dyGoal < 8) {
+          winRef.current = true
+          setWin(true)
+          inputRef.current = { x: 0, y: 0 }
         }
       }
 
@@ -427,6 +464,9 @@ export default function App(): ReactElement {
       ctx.fillStyle = '#6b8e23'
       ctx.fillRect(0, groundY, worldWidth, canvas.height - groundY)
 
+      // draw goal
+      drawGoal(ctx, GOAL_X, groundY, ts / 1000)
+
       // draw enemies (world coords)
       for (const en of enemies) {
         if (!en.alive) continue
@@ -454,6 +494,35 @@ export default function App(): ReactElement {
       }
 
       ctx.restore()
+
+      // HUD overlays - win overlay
+      if (winRef.current) {
+        // draw a subtle glow or text in screen space
+        ctx.setTransform(1, 0, 0, 1, 0, 0)
+        ctx.fillStyle = 'rgba(255,255,255,0.06)'
+        ctx.fillRect(0, 0, canvas.width, canvas.height)
+      }
+
+      } catch (err) {
+        // Draw error message to canvas so it's visible instead of a white screen
+        try {
+          const msg = err instanceof Error ? err.stack || err.message : String(err)
+          ctx.setTransform(1, 0, 0, 1, 0, 0)
+          ctx.clearRect(0, 0, canvas.width, canvas.height)
+          ctx.fillStyle = 'black'
+          ctx.fillRect(0, 0, canvas.width, canvas.height)
+          ctx.fillStyle = 'white'
+          ctx.font = '16px monospace'
+          const lines = msg.split('\n').slice(0, 20)
+          for (let i = 0; i < lines.length; i++) {
+            ctx.fillText(lines[i], 10, 24 + i * 18)
+          }
+        } catch (drawErr) {
+          // swallow
+        }
+        // stop loop on error
+        return
+      }
 
       rafRef.current = requestAnimationFrame(step)
     }
@@ -484,6 +553,15 @@ export default function App(): ReactElement {
           <div className="overlay-box">
             <div style={{ fontSize: 28, marginBottom: 12 }}>Game Over</div>
             <button className="overlay-button" onClick={() => restart()}>Restart</button>
+          </div>
+        </div>
+      )}
+
+      {win && (
+        <div className="overlay">
+          <div className="overlay-box">
+            <div style={{ fontSize: 28, marginBottom: 12 }}>You Win!</div>
+            <button className="overlay-button" onClick={() => restart()}>Play Again</button>
           </div>
         </div>
       )}
@@ -650,6 +728,24 @@ function drawStar(ctx: CanvasRenderingContext2D, cx: number, cy: number, radius:
     ctx.lineTo(Math.cos(ang) * outer, Math.sin(ang) * outer)
     ctx.lineTo(Math.cos(ang2) * inner, Math.sin(ang2) * inner)
   }
+  ctx.closePath()
+  ctx.fill()
+  ctx.restore()
+}
+
+function drawGoal(ctx: CanvasRenderingContext2D, x: number, groundY: number, t: number) {
+  // simple flag pole and flag
+  const poleH = 48
+  ctx.save()
+  ctx.fillStyle = '#8b5a2b'
+  ctx.fillRect(x - 2, groundY - poleH, 4, poleH)
+  // flag waving
+  const sway = Math.sin(t * 6) * 6
+  ctx.beginPath()
+  ctx.fillStyle = '#ff2d55'
+  ctx.moveTo(x + 2, groundY - poleH + 6)
+  ctx.lineTo(x + 2 + 32 + sway, groundY - poleH + 12)
+  ctx.lineTo(x + 2, groundY - poleH + 18)
   ctx.closePath()
   ctx.fill()
   ctx.restore()
